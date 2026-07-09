@@ -44,16 +44,20 @@ function getXMedia(msg: Api.Message): { mimeType: string } | null {
 
 /**
  * Strip everything added by the sender (monetisation links, arrow emojis,
- * watch-link lines) so only the clean caption + hashtags remain.
+ * watch-link lines, trailer markers, backticks) so only the clean caption
+ * remains, with single line breaks between lines.
  */
-function cleanCaptionForX(text: string): string {
+export function cleanCaptionForX(text: string): string {
   return text
-    .replace(/https?:\/\/t\.me\/monitizeebot[^\s]*/gi, "")
-    .replace(/https?:\/\/[^\s]+/gi, "")          // any remaining URLs
+    .replace(/https?:\/\/[^\s]+/gi, "")          // any URLs (incl. monitizee links)
     .replace(/^👉+\s*.*/gim, "")                  // "👉 Watch full..." lines
     .replace(/^👈+\s*$/gim, "")                   // standalone 👈 lines
     .replace(/^•\s*Watch full.*/gim, "")           // fallback bullet lines
-    .replace(/\n{3,}/g, "\n\n")
+    .replace(/(?:👇+🔤*)+/gu, "")                 // 👇🔤🔤🔤🔤 / 👇👇👇 markers (re-added as pointer below)
+    .replace(/`/g, "")                            // no backticks on X
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n[ \t]+/g, "\n")
+    .replace(/\n{2,}/g, "\n")                     // single line breaks between caption lines
     .trim();
 }
 
@@ -80,6 +84,18 @@ export async function scanChannelForXPosts(
   const posts: XPost[] = [];
 
   try {
+    // Prefer the channel's public username for t.me links (t.me/username/id),
+    // even when the channel is configured by numeric id.
+    let linkChannel = channel;
+    if (!channel.startsWith("@")) {
+      try {
+        const entity: any = await client.getEntity(channel);
+        if (entity?.username) linkChannel = `@${entity.username}`;
+      } catch (err: any) {
+        logger.warn(`[x-scan] Could not resolve username for ${channel}, using id link: ${err.message}`);
+      }
+    }
+
     const iter = client.iterMessages(channel, {
       minId: fromMessageId,
       reverse: true,
@@ -97,10 +113,11 @@ export async function scanChannelForXPosts(
       const rawCaption = msg.message || "";
       if (!rawCaption.trim()) continue; // skip messages with no caption
 
-      const telegramLink = buildTelegramLink(channel, msg.id);
+      const telegramLink = buildTelegramLink(linkChannel, msg.id);
       const cleanCaption = cleanCaptionForX(rawCaption);
 
-      // Append the fixed X hashtag set, truncating the caption (never the hashtags) to fit 280 chars
+      // Layout: caption → hashtags.
+      // Truncate only the caption (never the hashtags) to fit 280 chars.
       const hashtagsBlock = `\n\n${X_HASHTAGS}`;
       const maxCaption = MAX_TWEET_LENGTH - hashtagsBlock.length;
       const caption = cleanCaption.length > maxCaption
