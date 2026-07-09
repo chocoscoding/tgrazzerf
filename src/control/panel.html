@@ -581,6 +581,9 @@
           <div class="card">
             <div class="section-title">𝕏 Status & Manual Run</div>
             <div id="xRunningIndicator" style="display:none" class="running-indicator"><div class="spinner"></div> Posting to X...</div>
+            <div class="btn-group" style="margin-bottom:12px;">
+              <button class="btn btn-primary" id="xToggleBtn" onclick="toggleX()">▶ Activate X Posting</button>
+            </div>
             <div class="stat-row"><span>Status</span><span class="val" id="xStatus">—</span></div>
             <div class="stat-row"><span>Posts Today</span><span class="val yellow" id="xPostsToday">—</span></div>
             <div class="stat-row"><span>Daily Limit</span><span class="val" id="xPostsPerDayDisplay">—</span></div>
@@ -946,6 +949,10 @@
           }
 
           document.getElementById("xStatus").textContent = cfg.xEnabled ? "🟢 Enabled" : "🔴 Disabled";
+          xEnabledState = !!cfg.xEnabled;
+          const toggleBtn = document.getElementById("xToggleBtn");
+          toggleBtn.textContent = xEnabledState ? "⏸ Deactivate X Posting" : "▶ Activate X Posting";
+          toggleBtn.style.background = xEnabledState ? "var(--red, #d9534f)" : "";
           document.getElementById("xPostsToday").textContent = xData.postsToday ?? 0;
           document.getElementById("xPostsPerDayDisplay").textContent = xData.postsPerDay ?? "—";
           document.getElementById("xTotalPosted").textContent = xData.totalPosted ?? 0;
@@ -983,6 +990,18 @@
             }).join("");
           }
         } catch (e) { console.error(e); }
+      }
+
+      let xEnabledState = false;
+
+      async function toggleX() {
+        const res = await api("POST", "/config", { xEnabled: !xEnabledState });
+        if (res.success) {
+          toast(!xEnabledState ? "X posting activated" : "X posting deactivated");
+          loadXTab();
+        } else {
+          toast(res.error || "Error toggling X posting", "error");
+        }
       }
 
       async function saveXConfig() {
