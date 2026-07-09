@@ -130,7 +130,7 @@ function buildCaptionWithEntities(
 
   links.forEach((link, idx) => {
     const label = links.length === 1 ? "Watch full video here" : `Watch full Part ${idx + 1} video here`;
-    const line = `👉👉 ${label}`;
+    const line = `👉${label}`;
 
     const currentOffset = lines.join("\n").length + (lines.length > 0 ? 1 : 0);
     const boldOffset = currentOffset + 4; // after "• "
