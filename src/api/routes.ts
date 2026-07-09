@@ -1,26 +1,19 @@
-import { Router, Request, Response } from 'express';
-import {
-  getConfig,
-  saveConfig,
-  getQueue,
-  getStats,
-  getCheckpoints,
-  AppConfig,
-  defaultConfig,
-} from '../utils/store';
-import { runJob, getIsRunning } from '../scheduler/runner';
-import { startScheduler, stopScheduler, restartScheduler } from '../scheduler/cron';
-import { logger } from '../utils/logger';
+import { Router, Request, Response } from "express";
+import { getConfig, saveConfig, getQueue, getStats, getCheckpoints, saveCheckpoints, AppConfig, defaultConfig, getXStats, getXCheckpoints } from "../utils/store";
+import { runJob, getIsRunning } from "../scheduler/runner";
+import { runXJob, getXIsRunning } from "../scheduler/xRunner";
+import { startScheduler, stopScheduler, restartScheduler, startXScheduler, stopXScheduler } from "../scheduler/cron";
+import { logger } from "../utils/logger";
 
 const router = Router();
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
-router.get('/config', (req: Request, res: Response) => {
+router.get("/config", (req: Request, res: Response) => {
   res.json(getConfig());
 });
 
-router.post('/config', (req: Request, res: Response) => {
+router.post("/config", (req: Request, res: Response) => {
   const current = getConfig();
   const updated: AppConfig = { ...current, ...req.body };
   saveConfig(updated);
@@ -37,15 +30,27 @@ router.post('/config', (req: Request, res: Response) => {
     stopScheduler();
   }
 
-  logger.info('Config updated', updated);
+  // Restart X scheduler if X settings changed
+  const xSettingsChanged =
+    req.body.xEnabled !== undefined ||
+    (req.body.xCronSchedule && req.body.xCronSchedule !== current.xCronSchedule);
+  if (xSettingsChanged) {
+    if (updated.xEnabled && updated.xCronSchedule) {
+      startXScheduler();
+    } else {
+      stopXScheduler();
+    }
+  }
+
+  logger.info("Config updated", updated);
   res.json({ success: true, config: updated });
 });
 
 // ─── Channels ─────────────────────────────────────────────────────────────────
 
-router.post('/channels/source/add', (req: Request, res: Response) => {
+router.post("/channels/source/add", (req: Request, res: Response) => {
   const { channel } = req.body;
-  if (!channel) return res.status(400).json({ error: 'channel required' });
+  if (!channel) return res.status(400).json({ error: "channel required" });
   const config = getConfig();
   if (!config.sourceChannels.includes(channel)) {
     config.sourceChannels.push(channel);
@@ -54,18 +59,67 @@ router.post('/channels/source/add', (req: Request, res: Response) => {
   res.json({ success: true, sourceChannels: config.sourceChannels });
 });
 
-router.post('/channels/source/remove', (req: Request, res: Response) => {
+router.post("/channels/source/remove", (req: Request, res: Response) => {
   const { channel } = req.body;
-  if (!channel) return res.status(400).json({ error: 'channel required' });
+  if (!channel) return res.status(400).json({ error: "channel required" });
   const config = getConfig();
-  config.sourceChannels = config.sourceChannels.filter(c => c !== channel);
+  config.sourceChannels = config.sourceChannels.filter((c) => c !== channel);
+  if (config.sourceStartFrom && config.sourceStartFrom[channel] !== undefined) {
+    delete config.sourceStartFrom[channel];
+  }
   saveConfig(config);
+
+  const checkpoints = getCheckpoints();
+  if (checkpoints[channel] !== undefined) {
+    delete checkpoints[channel];
+    saveCheckpoints(checkpoints);
+  }
+
   res.json({ success: true, sourceChannels: config.sourceChannels });
 });
 
-router.post('/channels/target/add', (req: Request, res: Response) => {
+router.post("/channels/source/start-from", (req: Request, res: Response) => {
+  const { channel, startFrom } = req.body;
+  if (!channel) return res.status(400).json({ error: "channel required" });
+
+  const parsed = Number(startFrom);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return res.status(400).json({ error: "startFrom must be a non-negative number" });
+  }
+
+  const config = getConfig();
+  config.sourceStartFrom = config.sourceStartFrom || {};
+  config.sourceStartFrom[channel] = parsed;
+  saveConfig(config);
+
+  // Force next scrape to start from this position by resetting checkpoint for this channel
+  const checkpoints = getCheckpoints();
+  checkpoints[channel] = parsed;
+  saveCheckpoints(checkpoints);
+
+  res.json({ success: true, channel, startFrom: parsed, sourceStartFrom: config.sourceStartFrom, checkpoints });
+});
+
+router.post("/channels/source/end-at", (req: Request, res: Response) => {
+  const { channel, endAt } = req.body;
+  if (!channel) return res.status(400).json({ error: "channel required" });
+
+  const parsed = Number(endAt);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return res.status(400).json({ error: "endAt must be a non-negative number (0 = no limit)" });
+  }
+
+  const config = getConfig();
+  config.sourceEndAt = config.sourceEndAt || {};
+  config.sourceEndAt[channel] = parsed;
+  saveConfig(config);
+
+  res.json({ success: true, channel, endAt: parsed, sourceEndAt: config.sourceEndAt });
+});
+
+router.post("/channels/target/add", (req: Request, res: Response) => {
   const { channel } = req.body;
-  if (!channel) return res.status(400).json({ error: 'channel required' });
+  if (!channel) return res.status(400).json({ error: "channel required" });
   const config = getConfig();
   if (!config.targetChannels.includes(channel)) {
     config.targetChannels.push(channel);
@@ -74,50 +128,51 @@ router.post('/channels/target/add', (req: Request, res: Response) => {
   res.json({ success: true, targetChannels: config.targetChannels });
 });
 
-router.post('/channels/target/remove', (req: Request, res: Response) => {
+router.post("/channels/target/remove", (req: Request, res: Response) => {
   const { channel } = req.body;
-  if (!channel) return res.status(400).json({ error: 'channel required' });
+  if (!channel) return res.status(400).json({ error: "channel required" });
   const config = getConfig();
-  config.targetChannels = config.targetChannels.filter(c => c !== channel);
+  config.targetChannels = config.targetChannels.filter((c) => c !== channel);
   saveConfig(config);
   res.json({ success: true, targetChannels: config.targetChannels });
 });
 
 // ─── Scheduler ────────────────────────────────────────────────────────────────
 
-router.post('/scheduler/start', (req: Request, res: Response) => {
+router.post("/scheduler/start", (req: Request, res: Response) => {
   const config = getConfig();
   config.active = true;
   saveConfig(config);
   startScheduler();
-  res.json({ success: true, message: 'Scheduler started' });
+  res.json({ success: true, message: "Scheduler started" });
 });
 
-router.post('/scheduler/stop', (req: Request, res: Response) => {
+router.post("/scheduler/stop", (req: Request, res: Response) => {
   const config = getConfig();
   config.active = false;
   saveConfig(config);
   stopScheduler();
-  res.json({ success: true, message: 'Scheduler stopped' });
+  res.json({ success: true, message: "Scheduler stopped" });
 });
 
-router.post('/scheduler/run-now', async (req: Request, res: Response) => {
+router.post("/scheduler/run-now", async (req: Request, res: Response) => {
   if (getIsRunning()) {
-    return res.status(409).json({ error: 'Job already running' });
+    return res.status(409).json({ error: "Job already running" });
   }
-  res.json({ success: true, message: 'Job triggered' });
-  // Run async after response
-  runJob().catch(err => logger.error('Manual run error: ' + err.message));
+  const count = req.body?.count;
+  const maxGroups = Number.isFinite(Number(count)) && Number(count) > 0 ? Number(count) : undefined;
+  res.json({ success: true, message: maxGroups ? `Job triggered (max ${maxGroups} groups)` : "Job triggered" });
+  runJob(maxGroups).catch((err) => logger.error("Manual run error: " + err.message));
 });
 
 // ─── Queue ────────────────────────────────────────────────────────────────────
 
-router.get('/queue', (req: Request, res: Response) => {
+router.get("/queue", (req: Request, res: Response) => {
   const queue = getQueue();
   const status = req.query.status as string | undefined;
-  const filtered = status ? queue.filter(q => q.status === status) : queue;
-  const page = parseInt(req.query.page as string || '1', 10);
-  const limit = parseInt(req.query.limit as string || '50', 10);
+  const filtered = status ? queue.filter((q) => q.status === status) : queue;
+  const page = parseInt((req.query.page as string) || "1", 10);
+  const limit = parseInt((req.query.limit as string) || "50", 10);
   const start = (page - 1) * limit;
   res.json({
     total: filtered.length,
@@ -129,7 +184,7 @@ router.get('/queue', (req: Request, res: Response) => {
 
 // ─── Stats ────────────────────────────────────────────────────────────────────
 
-router.get('/stats', (req: Request, res: Response) => {
+router.get("/stats", (req: Request, res: Response) => {
   const stats = getStats();
   const queue = getQueue();
   const checkpoints = getCheckpoints();
@@ -138,19 +193,64 @@ router.get('/stats', (req: Request, res: Response) => {
     isRunning: getIsRunning(),
     queueSummary: {
       total: queue.length,
-      pending: queue.filter(q => q.status === 'pending').length,
-      processing: queue.filter(q => q.status === 'processing').length,
-      done: queue.filter(q => q.status === 'done').length,
-      failed: queue.filter(q => q.status === 'failed').length,
+      pending: queue.filter((q) => q.status === "pending").length,
+      processing: queue.filter((q) => q.status === "processing").length,
+      done: queue.filter((q) => q.status === "done").length,
+      failed: queue.filter((q) => q.status === "failed").length,
     },
     checkpoints,
   });
 });
 
+// ─── X (Twitter) ──────────────────────────────────────────────────────────────
+
+router.get("/x/stats", (req: Request, res: Response) => {
+  const config = getConfig();
+  res.json({
+    enabled: config.xEnabled,
+    postsPerDay: config.xPostsPerDay,
+    xSourceChannels: config.xSourceChannels,
+    isRunning: getXIsRunning(),
+    checkpoints: getXCheckpoints(),
+    ...getXStats(),
+  });
+});
+
+router.post("/x/run-now", async (req: Request, res: Response) => {
+  if (getXIsRunning()) {
+    return res.status(409).json({ error: "X job already running" });
+  }
+  const count = req.body?.count;
+  const maxPosts = Number.isFinite(Number(count)) && Number(count) > 0 ? Number(count) : undefined;
+  res.json({ success: true, message: maxPosts ? `X job triggered (max ${maxPosts} posts)` : "X job triggered" });
+  runXJob(maxPosts).catch((err) => logger.error("Manual X run error: " + err.message));
+});
+
+router.post("/x/channels/add", (req: Request, res: Response) => {
+  const { channel } = req.body;
+  if (!channel) return res.status(400).json({ error: "channel required" });
+  const config = getConfig();
+  config.xSourceChannels = config.xSourceChannels || [];
+  if (!config.xSourceChannels.includes(channel)) {
+    config.xSourceChannels.push(channel);
+    saveConfig(config);
+  }
+  res.json({ success: true, xSourceChannels: config.xSourceChannels });
+});
+
+router.post("/x/channels/remove", (req: Request, res: Response) => {
+  const { channel } = req.body;
+  if (!channel) return res.status(400).json({ error: "channel required" });
+  const config = getConfig();
+  config.xSourceChannels = (config.xSourceChannels || []).filter((c) => c !== channel);
+  saveConfig(config);
+  res.json({ success: true, xSourceChannels: config.xSourceChannels });
+});
+
 // ─── Health ───────────────────────────────────────────────────────────────────
 
-router.get('/health', (req: Request, res: Response) => {
-  res.json({ status: 'ok', uptime: process.uptime() });
+router.get("/health", (req: Request, res: Response) => {
+  res.json({ status: "ok", uptime: process.uptime() });
 });
 
 export default router;

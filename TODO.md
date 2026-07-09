@@ -1,0 +1,3 @@
+- [x] Add explicit checkpoint-start logging in src/telegram/scraper.ts
+- [x] Verify no scraping logic changes were introduced
+- [x] Mark completion

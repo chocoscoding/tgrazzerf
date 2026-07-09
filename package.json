@@ -6,7 +6,7 @@
   "scripts": {
     "start": "tsx src/index.ts",
     "dev": "tsx watch src/index.ts",
-    "build": "tsc",
+    "build": "tsc && node -e \"require('fs').cpSync('src/control','dist/control',{recursive:true})\"",
     "start:prod": "node dist/index.js",
     "session": "tsx src/generate-session.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
@@ -18,6 +18,9 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
+  "engines": {
+    "node": ">=20"
+  },
   "bugs": {
     "url": "https://github.com/chocoscoding/tgrazzerf/issues"
   },
@@ -34,6 +37,7 @@
     "telegram": "^2.26.22",
     "ts-node": "^10.9.2",
     "tsx": "^4.22.4",
+    "twitter-api-v2": "^1.29.0",
     "typescript": "^6.0.3"
   }
 }

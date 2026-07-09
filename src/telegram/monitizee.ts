@@ -1,9 +1,9 @@
-import { TelegramClient } from 'telegram';
-import { Api } from 'telegram';
-import { NewMessage } from 'telegram/events';
-import { logger } from '../utils/logger';
+import { TelegramClient } from "telegram";
+import { Api } from "telegram";
+import { NewMessage } from "telegram/events";
+import { logger } from "../utils/logger";
 
-const MONITIZEE_BOT = process.env.MONITIZEE_BOT || 'monitizeebot';
+const MONITIZEE_BOT = process.env.MONITIZEE_BOT || "monitizeebot";
 const LINK_REGEX = /https:\/\/t\.me\/monitizeebot\?start=\S+/;
 
 /**
@@ -43,28 +43,28 @@ async function waitForBotResponse(client: TelegramClient, timeoutMs = 30000): Pr
 /**
  * Send /create to monitizee bot, forward the media message, then wait for the link.
  */
-export async function getMonetizationLink(
-  client: TelegramClient,
-  sourceChannel: string,
-  mediaMessageId: number
-): Promise<string | null> {
+export async function getMonetizationLink(client: TelegramClient, sourceChannel: string, mediaMessageId: number): Promise<string | null> {
   try {
     logger.info(`Getting monetization link for message ${mediaMessageId} from ${sourceChannel}`);
 
     // Send /create command to bot
-    await client.sendMessage(MONITIZEE_BOT, { message: '/create' });
+    await client.sendMessage(MONITIZEE_BOT, { message: "/create" });
     await sleep(1500);
 
     // Start listening for bot response BEFORE forwarding
     const linkPromise = waitForBotResponse(client, 45000);
 
     // Forward the media message (without caption/sender) to the bot
-    await client.forwardMessages(MONITIZEE_BOT, {
-      messages: [mediaMessageId],
-      fromPeer: sourceChannel,
-      dropAuthor: true,
-      noforwards: false,
-    });
+    await client.invoke(
+      new Api.messages.ForwardMessages({
+        fromPeer: sourceChannel,
+        id: [mediaMessageId],
+        toPeer: MONITIZEE_BOT,
+        dropAuthor: true,
+        dropMediaCaptions: true,
+        noforwards: false,
+      }),
+    );
 
     logger.info(`Forwarded message ${mediaMessageId} to ${MONITIZEE_BOT}, waiting for response...`);
 
@@ -84,5 +84,5 @@ export async function getMonetizationLink(
 }
 
 function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
