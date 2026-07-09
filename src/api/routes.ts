@@ -1,5 +1,5 @@
 import { Router, Request, Response } from "express";
-import { getConfig, saveConfig, getQueue, getStats, getCheckpoints, saveCheckpoints, AppConfig, defaultConfig, getXStats, getXCheckpoints } from "../utils/store";
+import { getConfig, saveConfig, getQueue, getStats, getCheckpoints, saveCheckpoints, AppConfig, defaultConfig, getXStats, getXCheckpoints, saveXCheckpoint } from "../utils/store";
 import { runJob, getIsRunning } from "../scheduler/runner";
 import { runXJob, getXIsRunning } from "../scheduler/xRunner";
 import { startXAuth, completeXAuth } from "../twitter/auth";
@@ -237,6 +237,21 @@ router.post("/x/channels/add", (req: Request, res: Response) => {
     saveConfig(config);
   }
   res.json({ success: true, xSourceChannels: config.xSourceChannels });
+});
+
+// Manually set the X checkpoint for a channel — the next X run scans messages
+// strictly AFTER this message id.
+router.post("/x/channels/start-from", (req: Request, res: Response) => {
+  const { channel, startFrom } = req.body;
+  if (!channel) return res.status(400).json({ error: "channel required" });
+
+  const parsed = Number(startFrom);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return res.status(400).json({ error: "startFrom must be a non-negative number" });
+  }
+
+  saveXCheckpoint(channel, parsed);
+  res.json({ success: true, channel, startFrom: parsed, checkpoints: getXCheckpoints() });
 });
 
 router.post("/x/channels/remove", (req: Request, res: Response) => {

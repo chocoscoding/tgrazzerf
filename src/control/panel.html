@@ -610,7 +610,7 @@
         </div>
 
         <div class="card" style="margin-top:0">
-          <div class="section-title">𝕏 Checkpoints (last posted message per channel)</div>
+          <div class="section-title">𝕏 Checkpoints (next run starts after this message ID)</div>
           <div id="xCheckpointRows"><div style="color:var(--muted);font-size:0.8rem">Loading…</div></div>
         </div>
       </div>
@@ -970,10 +970,12 @@
                   <button class="remove-btn" onclick="removeXChannel('${c}')">✕</button>
                 </li>`).join("");
 
-          // X checkpoints
+          // X checkpoints — skip re-render while the user is typing a start ID
           const checkpoints = xData.checkpoints || {};
           const cpContainer = document.getElementById("xCheckpointRows");
-          if (channels.length === 0) {
+          if (cpContainer.contains(document.activeElement)) {
+            // leave the DOM alone; next refresh will pick up changes
+          } else if (channels.length === 0) {
             cpContainer.innerHTML = '<div style="color:var(--muted);font-size:0.8rem">No X source channels</div>';
           } else {
             cpContainer.innerHTML = channels.map((ch) => {
@@ -981,11 +983,17 @@
               const slug = ch.replace(/^@/, "");
               const cpDisplay = cp ? `#${cp.toLocaleString()}` : "—";
               const link = cp ? `<a href="https://t.me/${slug}/${cp}" target="_blank" style="color:var(--accent);text-decoration:none;font-size:0.8rem;">↗</a>` : "";
-              return `<div class="stat-row">
-                <span style="font-size:0.8rem;">${ch}</span>
-                <span style="display:flex;align-items:center;gap:6px;">
-                  <span class="val" style="font-family:monospace;">${cpDisplay}</span>${link}
-                </span>
+              return `<div style="padding:6px 0;">
+                <div class="stat-row">
+                  <span style="font-size:0.8rem;">${ch}</span>
+                  <span style="display:flex;align-items:center;gap:6px;">
+                    <span class="val" style="font-family:monospace;">${cpDisplay}</span>${link}
+                  </span>
+                </div>
+                <div style="display:flex;gap:8px;width:100%;align-items:center;margin-top:4px;">
+                  <input type="number" id="xStartFrom-${encodeURIComponent(ch)}" placeholder="Start from message ID" min="0" style="flex:1;" />
+                  <button class="btn btn-ghost" style="padding:6px 10px;font-size:0.75rem;" onclick="saveXStartFrom('${ch.replace(/'/g, "\\'")}')">Set</button>
+                </div>
               </div>`;
             }).join("");
           }
@@ -1039,6 +1047,29 @@
         const res = await api("POST", "/x/channels/add", { channel });
         if (res.success) { document.getElementById("newXChannel").value = ""; toast(`Added ${channel}`); loadXTab(); }
         else toast("Error adding channel", "error");
+      }
+
+      async function saveXStartFrom(channel) {
+        try {
+          const input = document.getElementById("xStartFrom-" + encodeURIComponent(channel));
+          const value = parseInt(input.value || "", 10);
+          if (!Number.isFinite(value) || value < 0) {
+            toast("Enter a valid message ID", "error");
+            return;
+          }
+          const res = await api("POST", "/x/channels/start-from", { channel, startFrom: value });
+          if (res.success) {
+            toast(`X checkpoint for ${channel} set to #${value}`);
+            input.value = "";
+            input.blur();
+            loadXTab();
+          } else {
+            toast(res.error || "Error setting checkpoint", "error");
+          }
+        } catch (e) {
+          console.error(e);
+          toast("Error setting checkpoint", "error");
+        }
       }
 
       async function removeXChannel(channel) {
