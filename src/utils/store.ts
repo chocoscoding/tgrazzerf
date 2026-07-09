@@ -10,6 +10,7 @@ const CHECKPOINTS_FILE = path.join(DATA_DIR, "checkpoints.json");
 const QUEUE_FILE = path.join(DATA_DIR, "queue.json");
 const STATS_FILE = path.join(DATA_DIR, "stats.json");
 const X_CHECKPOINTS_FILE = path.join(DATA_DIR, "x-checkpoints.json");
+const ROTATION_FILE = path.join(DATA_DIR, "rotation.json");
 const X_STATS_FILE = path.join(DATA_DIR, "x-stats.json");
 
 function ensureDir() {
@@ -177,6 +178,18 @@ export function incrementStats(field: "totalProcessed" | "totalSent" | "totalFai
   const stats = getStats();
   stats[field] = (stats[field] || 0) + 1;
   writeJson(STATS_FILE, stats);
+}
+
+// ── Source channel rotation ────────────────────────────────────────────────────
+// Remembers which source channel a group was last scraped from, so the next
+// run resumes the round-robin from the channel after it.
+
+export function getLastScrapedChannel(): string | null {
+  return readJson<{ lastChannel: string | null }>(ROTATION_FILE, { lastChannel: null }).lastChannel;
+}
+
+export function saveLastScrapedChannel(channel: string) {
+  writeJson(ROTATION_FILE, { lastChannel: channel });
 }
 
 // ── X (Twitter) checkpoints ────────────────────────────────────────────────────

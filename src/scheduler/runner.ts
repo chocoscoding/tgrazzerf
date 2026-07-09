@@ -1,9 +1,19 @@
 import { getClient } from "../telegram/client";
 import { scrapeChannel } from "../telegram/scraper";
 import { processQueueItem } from "../telegram/sender";
-import { getConfig, getQueue, updateStats, incrementStats, QueueItem } from "../utils/store";
+import {
+  getConfig,
+  getQueue,
+  addToQueue,
+  updateQueueItem,
+  updateStats,
+  incrementStats,
+  getLastScrapedChannel,
+  saveLastScrapedChannel,
+  QueueItem,
+} from "../utils/store";
 
-// Scrape at most this many groups per channel per run — effectively unlimited
+// Fallback cap when maxPerRun is unset/zero — effectively unlimited
 const MAX_GROUPS_PER_CHANNEL = 10_000;
 import { logger } from "../utils/logger";
 
@@ -14,9 +24,18 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
- * Main runner: scrapes all source channels then processes found groups.
+ * Main runner.
+ *
+ * Flow per run:
+ *   1. Drain any items left "pending" in the persistent queue from earlier runs.
+ *   2. Round-robin the source channels: scrape ONE complete group (trailer +
+ *      media) from a channel, post it, then move to the next channel, wrapping
+ *      around until the run cap is met or every channel has nothing new.
+ *      The rotation position persists across runs, so the next job resumes
+ *      from the channel after the last one scraped.
+ *
  * @param maxGroups  Optional cap on how many groups to process this run.
- *                   Omit (or pass undefined) to process everything available.
+ *                   Omit (or pass undefined) to use the configured maxPerRun.
  */
 export async function runJob(maxGroups?: number): Promise<void> {
   if (isRunning) {
@@ -45,62 +64,92 @@ export async function runJob(maxGroups?: number): Promise<void> {
   const startTime = Date.now();
   logger.info("=== Job started ===");
 
-  let processedCount = 0;
+  let processedCount = 0; // successful posts
+  let attempted = 0; // items counted against the run cap
 
   try {
     const client = await getClient();
-    // ── 1. Collect items to process ──────────────────────────────────────────
-    // Start with anything already pending in the persistent queue
-    const existingPending = getQueue().filter((q) => q.status === "pending");
-    const itemsToProcess: QueueItem[] = [...existingPending];
 
-    // Scrape every source channel — find groups since last checkpoint.
-    // Explicit maxGroups (manual run) wins; otherwise honour the configured maxPerRun.
+    // Explicit maxGroups (manual run) wins; otherwise honour the configured maxPerRun
     const configuredMax = config.maxPerRun > 0 ? config.maxPerRun : MAX_GROUPS_PER_CHANNEL;
-    const groupCap = maxGroups ?? configuredMax;
-    for (const channel of config.sourceChannels) {
-      if (itemsToProcess.length >= groupCap) break;
-      if (!getConfig().active) {
-        logger.warn("Scheduler deactivated mid-run — aborting scrape");
-        break;
-      }
-      try {
-        const remaining = groupCap - itemsToProcess.length;
-        const scraped = await scrapeChannel(client, channel, remaining);
-        logger.info(`Scraped ${scraped.length} item(s) from ${channel}`);
-        itemsToProcess.push(...scraped);
-        if (scraped.length > 0) await sleep(1500);
-      } catch (err: any) {
-        logger.error(`Error scraping ${channel}: ${err.message}`);
-      }
-    }
+    const cap = maxGroups ?? configuredMax;
 
-    // Honour the cap on the total list (includes pre-existing pending)
-    if (itemsToProcess.length > groupCap) {
-      itemsToProcess.splice(groupCap);
-    }
+    const stopRequested = () => !getConfig().active;
 
-    if (itemsToProcess.length === 0) {
-      logger.info("No items to process this run");
-      return;
-    }
-
-    logger.info(`Processing ${itemsToProcess.length} item(s) this run`);
-
-    // ── 2. Process each item sequentially ────────────────────────────────────
-    for (const item of itemsToProcess) {
-      if (!getConfig().active) {
-        logger.warn("Scheduler deactivated mid-run — aborting remaining items");
-        break;
-      }
+    const handleItem = async (item: QueueItem) => {
+      updateQueueItem(item.id, { status: "processing" });
       try {
         const success = await processQueueItem(client, item);
         if (success) processedCount++;
+        updateQueueItem(item.id, {
+          status: success ? "done" : "failed",
+          processedAt: new Date().toISOString(),
+        });
         incrementStats("totalProcessed");
       } catch (err: any) {
         logger.error(`Error processing item ${item.id}: ${err.message}`);
+        updateQueueItem(item.id, {
+          status: "failed",
+          error: err.message,
+          processedAt: new Date().toISOString(),
+        });
       }
+      attempted++;
       await sleep(config.sendDelayMs);
+    };
+
+    // ── 1. Drain items left pending from earlier runs ────────────────────────
+    let aborted = false;
+    for (const item of getQueue().filter((q) => q.status === "pending")) {
+      if (attempted >= cap) break;
+      if (stopRequested()) {
+        aborted = true;
+        break;
+      }
+      await handleItem(item);
+    }
+
+    // ── 2. Round-robin the source channels: one group each, rotating ─────────
+    const channels = config.sourceChannels;
+    const lastUsed = getLastScrapedChannel();
+    // Resume from the channel after the last one scraped (indexOf → -1 falls back to 0)
+    let idx = lastUsed ? (channels.indexOf(lastUsed) + 1) % channels.length : 0;
+    const exhausted = new Set<string>();
+
+    while (!aborted && attempted < cap && exhausted.size < channels.length) {
+      if (stopRequested()) {
+        aborted = true;
+        break;
+      }
+
+      const channel = channels[idx];
+      idx = (idx + 1) % channels.length;
+      if (exhausted.has(channel)) continue;
+
+      let scraped: QueueItem[] = [];
+      try {
+        scraped = await scrapeChannel(client, channel, 1);
+      } catch (err: any) {
+        logger.error(`Error scraping ${channel}: ${err.message}`);
+      }
+
+      if (scraped.length === 0) {
+        logger.info(`[rotation] ${channel} has nothing new — out of rotation for this run`);
+        exhausted.add(channel);
+        continue;
+      }
+
+      const item = scraped[0];
+      addToQueue(item);
+      saveLastScrapedChannel(channel);
+      logger.info(`[rotation] 1 group from ${channel} → processing`);
+      await handleItem(item);
+    }
+
+    if (aborted) {
+      logger.warn("Scheduler deactivated mid-run — aborting remaining items");
+    } else if (attempted === 0) {
+      logger.info("No items to process this run");
     }
   } catch (err: any) {
     logger.error(`Job error: ${err.message}`);
