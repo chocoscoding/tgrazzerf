@@ -54,10 +54,16 @@ export async function runJob(maxGroups?: number): Promise<void> {
     const existingPending = getQueue().filter((q) => q.status === "pending");
     const itemsToProcess: QueueItem[] = [...existingPending];
 
-    // Scrape every source channel — find groups since last checkpoint
-    const groupCap = maxGroups ?? MAX_GROUPS_PER_CHANNEL;
+    // Scrape every source channel — find groups since last checkpoint.
+    // Explicit maxGroups (manual run) wins; otherwise honour the configured maxPerRun.
+    const configuredMax = config.maxPerRun > 0 ? config.maxPerRun : MAX_GROUPS_PER_CHANNEL;
+    const groupCap = maxGroups ?? configuredMax;
     for (const channel of config.sourceChannels) {
       if (itemsToProcess.length >= groupCap) break;
+      if (!getConfig().active) {
+        logger.warn("Scheduler deactivated mid-run — aborting scrape");
+        break;
+      }
       try {
         const remaining = groupCap - itemsToProcess.length;
         const scraped = await scrapeChannel(client, channel, remaining);
@@ -70,8 +76,8 @@ export async function runJob(maxGroups?: number): Promise<void> {
     }
 
     // Honour the cap on the total list (includes pre-existing pending)
-    if (maxGroups && itemsToProcess.length > maxGroups) {
-      itemsToProcess.splice(maxGroups);
+    if (itemsToProcess.length > groupCap) {
+      itemsToProcess.splice(groupCap);
     }
 
     if (itemsToProcess.length === 0) {
@@ -83,6 +89,10 @@ export async function runJob(maxGroups?: number): Promise<void> {
 
     // ── 2. Process each item sequentially ────────────────────────────────────
     for (const item of itemsToProcess) {
+      if (!getConfig().active) {
+        logger.warn("Scheduler deactivated mid-run — aborting remaining items");
+        break;
+      }
       try {
         const success = await processQueueItem(client, item);
         if (success) processedCount++;
