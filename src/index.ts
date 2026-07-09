@@ -12,6 +12,10 @@ dotenv.config();
 const app = express();
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
+// Behind Render/Railway/nginx etc. the TLS terminates at the proxy; this makes
+// req.protocol report https so the X OAuth callback URL is built correctly.
+app.set('trust proxy', 1);
+
 // ─── Middleware ───────────────────────────────────────────────────────────────
 app.use(cors());
 app.use(express.json());
@@ -26,6 +30,11 @@ const PANEL_PASS = process.env.PANEL_PASS || '';
 
 if (PANEL_USER && PANEL_PASS) {
   app.use((req, res, next) => {
+    // X redirects the browser here after authorization; it can't carry Basic
+    // auth credentials. Safe to exempt: the exchange only succeeds for a
+    // pending oauth_token this server itself generated minutes earlier.
+    if (req.path === '/api/x/auth/callback') return next();
+
     const header = req.headers.authorization || '';
     if (header.startsWith('Basic ')) {
       const [user, ...passParts] = Buffer.from(header.slice(6), 'base64').toString('utf-8').split(':');

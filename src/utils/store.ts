@@ -45,6 +45,8 @@ export interface AppConfig {
   xApiSecret: string;
   xAccessToken: string;
   xAccessTokenSecret: string;
+  // Handle of the X account the tokens belong to (set by the OAuth connect flow)
+  xConnectedUser: string;
   xPostsPerDay: number;
   xCronSchedule: string;
   // Telegram channels to read from when building X posts (usually the same as targetChannels)
@@ -110,6 +112,7 @@ export const defaultConfig: AppConfig = {
   xApiSecret: process.env.X_API_SECRET || "",
   xAccessToken: process.env.X_ACCESS_TOKEN || "",
   xAccessTokenSecret: process.env.X_ACCESS_TOKEN_SECRET || "",
+  xConnectedUser: "",
   xPostsPerDay: 10,
   xCronSchedule: "0 * * * *", // every hour
   xSourceChannels: [],

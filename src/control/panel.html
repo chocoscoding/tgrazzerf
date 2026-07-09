@@ -550,8 +550,15 @@
             <div class="section-title">𝕏 API Credentials</div>
             <div class="form-group"><label>API Key</label><input type="text" id="xApiKey" placeholder="API Key" /></div>
             <div class="form-group"><label>API Secret</label><input type="password" id="xApiSecret" placeholder="API Secret" /></div>
-            <div class="form-group"><label>Access Token</label><input type="text" id="xAccessToken" placeholder="Access Token" /></div>
-            <div class="form-group"><label>Access Token Secret</label><input type="password" id="xAccessTokenSecret" placeholder="Access Token Secret" /></div>
+            <div style="margin:4px 0 12px;padding:10px;border:1px solid var(--border);border-radius:8px;">
+              <div style="font-size:0.75rem;color:var(--muted);margin-bottom:8px;">Connect with X login — access tokens are generated and saved automatically</div>
+              <div style="display:flex;gap:10px;align-items:center;">
+                <button class="btn btn-primary" onclick="window.location.href='/api/x/auth/start'">🔗 Connect X Account</button>
+                <span id="xConnectedAs" style="font-size:0.8rem;color:var(--muted);">Not connected</span>
+              </div>
+            </div>
+            <div class="form-group"><label>Access Token (auto-filled after connect)</label><input type="text" id="xAccessToken" placeholder="Access Token" /></div>
+            <div class="form-group"><label>Access Token Secret (auto-filled after connect)</label><input type="password" id="xAccessTokenSecret" placeholder="Access Token Secret" /></div>
             <div class="form-group">
               <label>Posts Per Day</label>
               <input type="number" id="xPostsPerDay" min="1" max="500" value="10" />
@@ -927,6 +934,16 @@
           document.getElementById("xAccessTokenSecret").value = cfg.xAccessTokenSecret || "";
           document.getElementById("xPostsPerDay").value = cfg.xPostsPerDay ?? 10;
           document.getElementById("xCronSchedule").value = cfg.xCronSchedule || "0 * * * *";
+
+          const connectedEl = document.getElementById("xConnectedAs");
+          if (cfg.xConnectedUser) {
+            connectedEl.textContent = `🟢 Connected as @${cfg.xConnectedUser}`;
+            connectedEl.style.color = "var(--green, #4caf50)";
+          } else if (cfg.xAccessToken && cfg.xAccessTokenSecret) {
+            connectedEl.textContent = "🟢 Tokens set (manual)";
+          } else {
+            connectedEl.textContent = "Not connected";
+          }
 
           document.getElementById("xStatus").textContent = cfg.xEnabled ? "🟢 Enabled" : "🔴 Disabled";
           document.getElementById("xPostsToday").textContent = xData.postsToday ?? 0;

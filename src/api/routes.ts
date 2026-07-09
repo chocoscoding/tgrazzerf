@@ -2,6 +2,7 @@ import { Router, Request, Response } from "express";
 import { getConfig, saveConfig, getQueue, getStats, getCheckpoints, saveCheckpoints, AppConfig, defaultConfig, getXStats, getXCheckpoints } from "../utils/store";
 import { runJob, getIsRunning } from "../scheduler/runner";
 import { runXJob, getXIsRunning } from "../scheduler/xRunner";
+import { startXAuth, completeXAuth } from "../twitter/auth";
 import { startScheduler, stopScheduler, restartScheduler, startXScheduler, stopXScheduler } from "../scheduler/cron";
 import { logger } from "../utils/logger";
 
@@ -246,6 +247,66 @@ router.post("/x/channels/remove", (req: Request, res: Response) => {
   saveConfig(config);
   res.json({ success: true, xSourceChannels: config.xSourceChannels });
 });
+
+// ─── X OAuth (3-legged, dynamic token generation) ─────────────────────────────
+
+/**
+ * The public base URL the X callback must return to. In production set
+ * PUBLIC_URL to the deployed backend URL (this exact host must also be
+ * registered as a Callback URI in the X developer portal).
+ */
+function getPublicUrl(req: Request): string {
+  const fromEnv = (process.env.PUBLIC_URL || "").replace(/\/+$/, "");
+  return fromEnv || `${req.protocol}://${req.get("host")}`;
+}
+
+router.get("/x/auth/start", async (req: Request, res: Response) => {
+  try {
+    const callbackUrl = `${getPublicUrl(req)}/api/x/auth/callback`;
+    const url = await startXAuth(callbackUrl);
+    res.redirect(url);
+  } catch (err: any) {
+    logger.error(`[x-auth] Start failed: ${err.message}`);
+    res.status(500).send(`X login could not be started: ${err.message}`);
+  }
+});
+
+router.get("/x/auth/callback", async (req: Request, res: Response) => {
+  const { oauth_token, oauth_verifier, denied } = req.query;
+
+  if (denied) {
+    return res.status(200).send(authResultPage("❌ Authorization was cancelled on X.", false));
+  }
+  if (typeof oauth_token !== "string" || typeof oauth_verifier !== "string") {
+    return res.status(400).send(authResultPage("❌ Missing oauth_token/oauth_verifier in callback.", false));
+  }
+
+  try {
+    const screenName = await completeXAuth(oauth_token, oauth_verifier);
+    res.send(authResultPage(`✅ Connected as @${screenName}. Tokens saved — posting is ready.`, true));
+  } catch (err: any) {
+    logger.error(`[x-auth] Callback failed: ${err.message}`);
+    res.status(500).send(authResultPage(`❌ Token exchange failed: ${err.message}`, false));
+  }
+});
+
+router.get("/x/auth/status", (req: Request, res: Response) => {
+  const config = getConfig();
+  res.json({
+    connected: !!(config.xAccessToken && config.xAccessTokenSecret),
+    user: config.xConnectedUser || null,
+  });
+});
+
+function authResultPage(message: string, success: boolean): string {
+  return `<!doctype html><html><body style="font-family:sans-serif;background:#0f1115;color:#e6e6e6;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;">
+    <div style="text-align:center;max-width:480px;">
+      <p style="font-size:1.1rem;">${message}</p>
+      <p><a href="/control" style="color:#4da3ff;">← Back to control panel</a></p>
+      ${success ? '<script>setTimeout(()=>{location.href="/control"},2500)</script>' : ""}
+    </div>
+  </body></html>`;
+}
 
 // ─── Health ───────────────────────────────────────────────────────────────────
 
