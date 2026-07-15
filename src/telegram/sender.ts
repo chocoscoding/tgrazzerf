@@ -133,7 +133,7 @@ function buildCaptionWithEntities(
     const line = `👉${label}`;
 
     const currentOffset = lines.join("\n").length + (lines.length > 0 ? 1 : 0);
-    const boldOffset = currentOffset + 4; // after "• "
+    const boldOffset = currentOffset + (line.length - label.length); // skip past the "👉" prefix
     const boldLength = label.length;
 
     lines.push(line);

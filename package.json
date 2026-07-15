@@ -9,6 +9,7 @@
     "build": "tsc && node -e \"require('fs').cpSync('src/control','dist/control',{recursive:true})\"",
     "start:prod": "node dist/index.js",
     "session": "tsx src/generate-session.ts",
+    "test:messaging": "tsx src/telegram/testMessaging.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
